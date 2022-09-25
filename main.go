@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gin-gonic/gin"
 	_ "github.com/mattn/go-sqlite3"
 	"time"
@@ -24,9 +25,20 @@ type _comment struct {
 	Comment string `json:"comment"`
 	Pid     int64  `json:"pid"`
 } //评论结构
-var postNums int
-var userNums int
-var commentNums int
+type _userClaims struct {
+	username string
+	//jwt提供的标准claims
+	jwt.StandardClaims
+} //jwt struct
+var (
+	secret     = []byte("gin_wall") //SecretKey
+	EffectTime = 2 * time.Hour      //token有效时间
+)
+var (
+	postNums    int //post数量
+	userNums    int //user数量
+	commentNums int //comment数量
+)
 
 func main() {
 	InitDB()           //初始化数据库
@@ -36,16 +48,26 @@ func main() {
 
 func setupRouter() *gin.Engine {
 	r := gin.Default()
+	r.Use(JwtVerify) //token中间件
+	r.Group("/api/post")
+	{
+		r.POST("/addPost", AddPost)
+		r.GET("/getPost", GetPost)
+		r.PUT("/putPost", PutPost)
+		r.DELETE("/api/post/deletePost", DeletePost)
+	}
 
-	r.POST("/api/post/addPost", AddPost)
-	r.GET("/api/post/getPost", GetPost)
-	r.PUT("/api/post/putPost", PutPost)
-	r.DELETE("/api/post/deletePost", DeletePost)
-	r.POST("/api/user/register", Register)
-	r.POST("/api/user/login", Login)
-	r.POST("/api/comment/addComment", AddComment)
-	r.GET("/api/comment/getComment", GetComment)
-	r.DELETE("/api/comment/deleteComment", DeleteComment)
+	r.Group("/api/user")
+	{
+		r.POST("/register", Register)
+		r.POST("/login", Login)
+	}
+	r.Group("/api/comment")
+	{
+		r.POST("/api/comment/addComment", AddComment)
+		r.GET("/api/comment/getComment", GetComment)
+		r.DELETE("/api/comment/deleteComment", DeleteComment)
+	}
 	return r
 }
 func AddPost(c *gin.Context) { //添加推文
@@ -122,7 +144,32 @@ func Register(c *gin.Context) { //注册
 	db.Close()
 }
 func Login(c *gin.Context) { //登录
-
+	var user _user
+	c.ShouldBindJSON(&user)
+	var userFromDB _user
+	var exist int = 1
+	db, err := sql.Open("sqlite3", "wall.db")
+	CheckErr(err)
+	rows, err := db.Query("SELECT * FROM users")
+	for rows.Next() {
+		rows.Scan(&userFromDB)
+		if user.Username == userFromDB.Username && user.Password == userFromDB.Password {
+			exist = 0
+			var claims *_userClaims
+			claims.username = user.Username
+			GenerateToken(claims) //签发token
+			{
+				//return data
+			}
+			break
+		}
+	}
+	if exist == 1 {
+		{
+			//return response
+		}
+	}
+	db.Close()
 }
 
 func AddComment(c *gin.Context) { //添加评论
@@ -203,4 +250,34 @@ func CheckErr(err error) {
 	if err != nil {
 		panic(err)
 	}
+}
+func GenerateToken(claims *_userClaims) string { //生成token
+	claims.ExpiresAt = time.Now().Add(EffectTime).Unix()                                //过期时间
+	sign, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret) //签发token
+	CheckErr(err)
+	return sign
+}
+func JwtVerify(c *gin.Context) { //验证token
+	token := c.GetHeader("Authorization")
+	if token == "" {
+		panic("NoneToken")
+	}
+	{
+		//验证token
+	}
+	c.Set("Authorization", ParseToken(token).username)
+}
+func ParseToken(tokenGot string) *_userClaims {
+	// 解析token（传参分别为：字符串token，将解析结果保存至指定的结构体，返回生成token时所使用的secret从而用于解签名的方法）
+	token, err := jwt.ParseWithClaims(tokenGot, &_userClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return secret, nil
+	})
+	if token != nil {
+		// 从tokenClaims中获取到Claims对象，并使用断言，将该对象转换为我们自己定义的Claims
+		if claims, ok := token.Claims.(*_userClaims); ok && token.Valid {
+			return claims
+		}
+	}
+	CheckErr(err)
+	return nil
 }
