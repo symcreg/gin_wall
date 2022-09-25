@@ -48,8 +48,8 @@ func main() {
 
 func setupRouter() *gin.Engine {
 	r := gin.Default()
-	r.Use(JwtVerify) //token中间件
-	r.Group("/api/post")
+	r.Use(JwtVerify)     //token中间件
+	r.Group("/api/post") //推文路由组
 	{
 		r.POST("/addPost", AddPost)
 		r.GET("/getPost", GetPost)
@@ -57,12 +57,13 @@ func setupRouter() *gin.Engine {
 		r.DELETE("/api/post/deletePost", DeletePost)
 	}
 
-	r.Group("/api/user")
+	r.Group("/api/user") //用户路由组
 	{
 		r.POST("/register", Register)
 		r.POST("/login", Login)
+		r.POST("/auth", auth)
 	}
-	r.Group("/api/comment")
+	r.Group("/api/comment") //评论路由组
 	{
 		r.POST("/api/comment/addComment", AddComment)
 		r.GET("/api/comment/getComment", GetComment)
@@ -155,9 +156,7 @@ func Login(c *gin.Context) { //登录
 		rows.Scan(&userFromDB)
 		if user.Username == userFromDB.Username && user.Password == userFromDB.Password {
 			exist = 0
-			var claims *_userClaims
-			claims.username = user.Username
-			GenerateToken(claims) //签发token
+
 			{
 				//return data
 			}
@@ -251,33 +250,49 @@ func CheckErr(err error) {
 		panic(err)
 	}
 }
+func auth(c *gin.Context) {
+	var username string
+	c.Bind(&username)
+	var claims *_userClaims
+	claims.username = string(username)
+	sign := GenerateToken(claims) //签发token
+	c.Set("Authorization", sign)
+}
 func GenerateToken(claims *_userClaims) string { //生成token
 	claims.ExpiresAt = time.Now().Add(EffectTime).Unix()                                //过期时间
 	sign, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(secret) //签发token
 	CheckErr(err)
+	if err != nil {
+		return ""
+	}
 	return sign
 }
 func JwtVerify(c *gin.Context) { //验证token
 	token := c.GetHeader("Authorization")
 	if token == "" {
-		panic("NoneToken")
+		c.Set("Authorization", "none")
 	}
-	{
-		//验证token
+	jwtUsername, err := ParseToken(token)
+	if err != nil {
+		c.Set("Authorization", "err")
+	} else {
+		c.Set("Authorization", jwtUsername)
 	}
-	c.Set("Authorization", ParseToken(token).username)
 }
-func ParseToken(tokenGot string) *_userClaims {
+func ParseToken(tokenGot string) (*_userClaims, error) {
 	// 解析token（传参分别为：字符串token，将解析结果保存至指定的结构体，返回生成token时所使用的secret从而用于解签名的方法）
 	token, err := jwt.ParseWithClaims(tokenGot, &_userClaims{}, func(token *jwt.Token) (interface{}, error) {
 		return secret, nil
 	})
+	if err != nil { //解析出错 即鉴权失败
+		return nil, err
+	}
 	if token != nil {
 		// 从tokenClaims中获取到Claims对象，并使用断言，将该对象转换为我们自己定义的Claims
 		if claims, ok := token.Claims.(*_userClaims); ok && token.Valid {
-			return claims
+			return claims, nil
 		}
 	}
 	CheckErr(err)
-	return nil
+	return nil, err
 }
